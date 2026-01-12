@@ -1,0 +1,399 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Six Bodies, One Moment - Cosmic Visualization</title>
+    <style>
+        /* 
+           DESIGN AESTHETICS:
+           - Dark mode with rich contrasts
+           - Elegant typography (Inter/System)
+           - Glassmorphism for overlays
+        */
+        :root {
+            --bg-color: #050508;
+            --text-color: #e0e0e0;
+            --accent-color: #007BFF;
+            --overlay-bg: rgba(10, 10, 15, 0.7);
+        }
+
+        body, html {
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            background-color: var(--bg-color);
+            color: var(--text-color);
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+        }
+
+        #canvas-container {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+        }
+
+        #ui-layer {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            pointer-events: none;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            z-index: 10;
+        }
+
+        #interpretation {
+            max-width: 600px;
+            text-align: center;
+            padding: 2rem;
+            background: var(--overlay-bg);
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 12px;
+            opacity: 0;
+            transition: opacity 1.5s ease;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+        }
+
+        .fade-in { opacity: 1 !important; }
+
+        .line {
+            margin: 0.8rem 0;
+            font-size: 1.1rem;
+            letter-spacing: 0.05em;
+            line-height: 1.6;
+            font-weight: 300;
+        }
+
+        #timestamp-display {
+            position: absolute;
+            bottom: 2rem;
+            left: 2rem;
+            font-size: 0.9rem;
+            color: rgba(255, 255, 255, 0.5);
+            letter-spacing: 0.1em;
+        }
+
+        /* Loading Overlay */
+        #loader {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: var(--bg-color);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            z-index: 100;
+            transition: opacity 1s ease;
+        }
+    </style>
+</head>
+<body>
+
+    <div id="loader">Computing Celestial Alignment...</div>
+    <div id="canvas-container"></div>
+    
+    <div id="ui-layer">
+        <div id="interpretation">
+            <!-- Text will be injected here -->
+        </div>
+        <div id="timestamp-display"></div>
+    </div>
+
+    <!-- Three.js Library -->
+    <script type="importmap">
+        {
+            "imports": {
+                "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+                "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+            }
+        }
+    </script>
+
+    <script type="module">
+        import * as THREE from 'three';
+
+        /**
+         * ASTRONOMICAL CONSTANTS & FORMULAS
+         * Simplified orbital elements (J2000.0)
+         * Ref: Paul Schlyter, "How to compute planetary positions"
+         */
+        const J2000 = new Date('2000-01-01T12:00:00Z').getTime();
+        const DEG_TO_RAD = Math.PI / 180;
+
+        // Orbital elements [a, e, i, L, w, N]
+        // a: semi-major axis (AU), e: eccentricity, i: inclination (deg)
+        // L: mean longitude, w: longitude of perihelion, N: longitude of ascending node
+        // Rates are per century (T)
+        // These are simplified for cinematic effect but based on physical values.
+        const ELEMENTS = {
+            Sun: { a: 0, e: 0, i: 0, L_base: 0, L_rate: 0, color: 0xffcc33, size: 2.0 },
+            Mercury: { a: 0.387, e: 0.206, i: 7.0, L_base: 252.25, L_rate: 149472.67, color: 0xaaaaaa, size: 0.4 },
+            Venus: { a: 0.723, e: 0.007, i: 3.39, L_base: 181.98, L_rate: 58517.81, color: 0xeeddaa, size: 0.9 },
+            Earth: { a: 1.0, e: 0.0167, i: 0.0, L_base: 100.46, L_rate: 36000.77, color: 0x2255ff, size: 1.0 },
+            Mars: { a: 1.524, e: 0.0934, i: 1.85, L_base: 355.45, L_rate: 19140.30, color: 0xff4422, size: 0.6 },
+            Saturn: { a: 9.537, e: 0.054, i: 2.48, L_base: 49.94, L_rate: 1222.11, color: 0xdfd195, size: 1.8 }
+        };
+
+        // Moon elements (Geocentric simplified)
+        const MOON = { a: 0.00257, e: 0.0549, i: 5.14, L_base: 218.31, L_rate: 481267.88, orbit_scale: 5.0 };
+
+        /**
+         * CORE LOGIC
+         */
+        class Orbits {
+            static getPosition(bodyKey, targetDate) {
+                const el = ELEMENTS[bodyKey];
+                const T = (targetDate.getTime() - J2000) / (1000 * 60 * 60 * 24 * 36525);
+                
+                const L = (el.L_base + el.L_rate * T) % 360;
+                const radians = L * DEG_TO_RAD;
+                
+                // Simplified 2D projection for depth perspective in 3D
+                const r = el.a;
+                return new THREE.Vector3(
+                    Math.cos(radians) * r,
+                    0,
+                    Math.sin(radians) * r
+                );
+            }
+
+            // Get Geocentric offset
+            static getGeocentric(bodyKey, targetDate) {
+                const pPos = this.getPosition(bodyKey, targetDate);
+                const ePos = this.getPosition('Earth', targetDate);
+                return pPos.clone().sub(ePos);
+            }
+        }
+
+        /**
+         * THREE.JS SCENE SETUP
+         */
+        let scene, camera, renderer, clock;
+        let bodies = {};
+        const orbitScale = 50; // Visual scale factor
+
+        // Animation State
+        let phase = 0; // 0: Opening, 1: Reveal, 2: Freeze, 3: Interpretation, 4: Pullback
+        let phaseStartTime = 0;
+
+        function init() {
+            scene = new THREE.Scene();
+            camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 5000);
+            
+            renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.setPixelRatio(window.devicePixelRatio);
+            document.getElementById('canvas-container').appendChild(renderer.domElement);
+
+            clock = new THREE.Clock();
+
+            // Lighting
+            const ambient = new THREE.AmbientLight(0x404040, 2);
+            scene.add(ambient);
+            
+            const sunLight = new THREE.PointLight(0xffffff, 3, 1000);
+            scene.add(sunLight);
+
+            // Stars Background (Subtle)
+            const starGeometry = new THREE.BufferGeometry();
+            const starMaterial = new THREE.PointsMaterial({ color: 0xffffff, size: 0.5 });
+            const starVertices = [];
+            for(let i=0; i<3000; i++) {
+                starVertices.push(THREE.MathUtils.randFloatSpread(4000), THREE.MathUtils.randFloatSpread(4000), THREE.MathUtils.randFloatSpread(4000));
+            }
+            starGeometry.setAttribute('position', new THREE.Float32BufferAttribute(starVertices, 3));
+            scene.add(new THREE.Points(starGeometry, starMaterial));
+
+            createBodies();
+            setupInitialCamera();
+            
+            window.addEventListener('resize', onWindowResize);
+            
+            // Start
+            document.getElementById('loader').style.opacity = '0';
+            setTimeout(() => document.getElementById('loader').remove(), 1000);
+            
+            const now = new Date();
+            document.getElementById('timestamp-display').innerText = now.toLocaleString();
+            
+            animate();
+        }
+
+        function createBodies() {
+            const planetKeys = ['Sun', 'Mars', 'Venus', 'Saturn', 'Earth'];
+            
+            planetKeys.forEach(key => {
+                const el = ELEMENTS[key];
+                const group = new THREE.Group();
+                
+                // Sphere
+                const geo = new THREE.SphereGeometry(el.size, 32, 32);
+                const mat = new THREE.MeshStandardMaterial({ 
+                    color: el.color, 
+                    emissive: el.color, 
+                    emissiveIntensity: key === 'Sun' ? 1.5 : 0.2,
+                    roughness: 0.7,
+                    metalness: 0.3
+                });
+                const mesh = new THREE.Mesh(geo, mat);
+                group.add(mesh);
+
+                // Glow (Subtle)
+                const glowGeo = new THREE.SphereGeometry(el.size * 1.5, 32, 32);
+                const glowMat = new THREE.MeshBasicMaterial({ 
+                    color: el.color, 
+                    transparent: true, 
+                    opacity: 0.1,
+                    side: THREE.BackSide
+                });
+                group.add(new THREE.Mesh(glowGeo, glowMat));
+
+                // Saturn Rings
+                if (key === 'Saturn') {
+                    const ringGeo = new THREE.RingGeometry(el.size * 1.4, el.size * 2.5, 64);
+                    const ringMat = new THREE.MeshStandardMaterial({ 
+                        color: el.color, 
+                        side: THREE.DoubleSide, 
+                        transparent: true, 
+                        opacity: 0.6 
+                    });
+                    const ring = new THREE.Mesh(ringGeo, ringMat);
+                    ring.rotation.x = Math.PI / 2.5;
+                    group.add(ring);
+                }
+
+                bodies[key] = group;
+                scene.add(group);
+            });
+
+            // Moon
+            const moonGeo = new THREE.SphereGeometry(0.3, 32, 32);
+            const moonMat = new THREE.MeshStandardMaterial({ color: 0xcccccc });
+            const moon = new THREE.Mesh(moonGeo, moonMat);
+            bodies['Moon'] = moon;
+            bodies['Earth'].add(moon); // Relative to Earth
+        }
+
+        function setupInitialCamera() {
+            // Start near Earth
+            camera.position.set(20, 10, 30);
+            camera.lookAt(new THREE.Vector3(0,0,0));
+        }
+
+        function updatePositions(targetDate, timeScale = 1) {
+            const planetKeys = ['Sun', 'Mars', 'Venus', 'Saturn'];
+            
+            planetKeys.forEach(key => {
+                const geoPos = Orbits.getGeocentric(key, targetDate);
+                bodies[key].position.copy(geoPos.multiplyScalar(orbitScale));
+            });
+
+            // Earth stays at center in Geocentric View
+            bodies['Earth'].position.set(0, 0, 0);
+            bodies['Earth'].rotation.y += 0.005;
+
+            // Moon Logic (Geocentric relative)
+            const T = (targetDate.getTime() - J2000) / (1000 * 60 * 60 * 24 * 36525);
+            const moonL = (MOON.L_base + MOON.L_rate * T) % 360;
+            const moonRad = moonL * DEG_TO_RAD;
+            bodies['Moon'].position.set(
+                Math.cos(moonRad) * MOON.orbit_scale,
+                Math.sin(moonRad) * 1.0, // Slight inclination
+                Math.sin(moonRad) * MOON.orbit_scale
+            );
+        }
+
+        /**
+         * CINEMATIC ANIMATION ENGINE
+         */
+        const startTime = Date.now();
+        const interpretationText = [
+            "現在、太陽系はこの配置にあります。",
+            "火星は活発に動き、情熱の方向を示しています。",
+            "金星が整い、静かな調和が生まれています。",
+            "土星の遠い軌道は、積み重ねられた時間の厚みです。",
+            "月は地球を抱き、日々のリズムを刻み続けます。",
+            "この瞬間、六つの器がひとつの物語を織りなしました。"
+        ];
+
+        function animate() {
+            requestAnimationFrame(animate);
+            const elapsed = (Date.now() - startTime) / 1000;
+            const dt = clock.getDelta();
+
+            // Actual positions for "Now"
+            const currentDate = new Date();
+            
+            // Phase Logic
+            if (elapsed < 7) { // Phase 0: Opening
+                updatePositions(currentDate);
+                camera.position.lerp(new THREE.Vector3(15, 5, 20), 0.02);
+                camera.lookAt(bodies['Earth'].position);
+            } 
+            else if (elapsed < 25) { // Phase 1: Reveal
+                updatePositions(currentDate);
+                const targetCam = new THREE.Vector3(100, 80, 200);
+                camera.position.lerp(targetCam, 0.01);
+                camera.lookAt(new THREE.Vector3(0, 0, 0));
+            }
+            else if (elapsed < 32) { // Phase 2: Moment Freeze
+                updatePositions(currentDate);
+                // Camera slow drift
+                camera.position.x += 0.05;
+                camera.lookAt(new THREE.Vector3(0, 0, 0));
+            }
+            else if (elapsed < 45) { // Phase 3: Interpretation
+                updatePositions(currentDate);
+                document.getElementById('interpretation').classList.add('fade-in');
+                
+                // Text Cycle (Simplified)
+                const textIdx = Math.floor((elapsed - 32) / 2.5);
+                if (textIdx < interpretationText.length) {
+                    const container = document.getElementById('interpretation');
+                    if (!container.innerHTML.includes(interpretationText[textIdx])) {
+                        const line = document.createElement('div');
+                        line.className = 'line';
+                        line.innerText = interpretationText[textIdx];
+                        container.appendChild(line);
+                    }
+                }
+            }
+            else { // Closing
+                camera.position.multiplyScalar(1.002);
+                document.getElementById('interpretation').style.opacity = '0';
+            }
+
+            renderer.render(scene, camera);
+        }
+
+        function onWindowResize() {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        }
+
+        /**
+         * PLACEHOLDERS FOR FUTURE INPUTS
+         */
+        function updateToCustomMoment(date, location) {
+            console.log("Setting custom moment:", date, location);
+            // logic to set targetDate and recalibrate
+        }
+
+        init();
+
+    </script>
+</body>
+</html>
